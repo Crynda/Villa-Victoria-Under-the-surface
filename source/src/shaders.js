@@ -191,12 +191,12 @@ const WK = array<vec3f, 10>(vec3f(1., 2., 1.), vec3f(-2., 1., .9), vec3f(3., 1.,
 // ---------------------------------------------------------------- shared scene code
 const S_G = /*wgsl*/`
 struct G { vp: mat4x4f, sm: mat4x4f, cam: vec4f, right: vec4f, up: vec4f, fwd: vec4f, sun: vec4f, res: vec4f, mis: vec4f };
-const SIG = vec3f(.058, .0235, .0195);
-const KD = vec3f(.056, .0245, .0170);
-const WCOL = vec3f(.16, .58, .90);
-const KDZ = vec3f(.034, .023, .018);
-const PCOL = vec3f(.58, .66, .98);
-const SUNC = vec3f(1.7, 1.6, 1.45);
+const SIG = vec3f(.045, .039, .021);
+const KD = vec3f(.045, .025, .065);
+const WCOL = vec3f(.12, .52, .24);
+const KDZ = vec3f(.048, .029, .070);
+const PCOL = vec3f(.08, .32, .13);
+const SUNC = vec3f(1.55, 1.48, 1.18);
 const TAU = 6.2831853;
 const LOW = ${LV > 1};
 fn sat(x: f32) -> f32 { return clamp(x, 0., 1.); }
@@ -393,10 +393,10 @@ fn sway(p: vec2f, h: f32, t: f32) -> vec2f {
 }
 fn shape2(v: f32) -> f32 { return sin(3.14159 * sat(v)); }
 fn pal(h: f32) -> vec3f {
-  if (h < .3) { return vec3f(1., .62, .08); }
-  if (h < .6) { return vec3f(.12, 1., .22); }
-  if (h < .8) { return vec3f(.2, .85, 1.); }
-  return vec3f(1., .3, .8);
+  if (h < .3) { return vec3f(.72, .88, .24); }
+  if (h < .6) { return vec3f(.20, .72, .24); }
+  if (h < .8) { return vec3f(.48, .62, .18); }
+  return vec3f(.84, .92, .34);
 }
 @vertex fn vs(@builtin(vertex_index) vi: u32, i: LI) -> LO {
   var o: LO;
@@ -412,12 +412,12 @@ fn pal(h: f32) -> vec3f {
   switch ty {
     case 0 { col = mix(vec3f(.11, .125, .022), vec3f(.04, .10, .04), s1); col = mix(col, vec3f(.25, .17, .025), step(.72, s2)); pr = vec4f(.24, .9, 0., 0.); spc = pal(hsel * .72); shp = vec2f(.5, .32); wav = 1.9; }
     case 1 { col = vec3f(.10, .11, .035); pr = vec4f(0., .2, 0., 0.); shp = vec2f(.05, .1); wav = .3; fls = .3; }
-    case 2 { col = mix(vec3f(.05, .20, .16), vec3f(.12, .26, .22), s1); col = mix(col, vec3f(.30, .14, .24), step(.85, s2)); pr = vec4f(.05, 1.0, .25, 0.); spc = vec3f(.6, 1., .9); shp = vec2f(.45, .35); wav = 2.2; }
-    case 3 { col = mix(vec3f(.02, .05, .065), vec3f(.05, .03, .08), s1); col = mix(col, vec3f(.09, .03, .09), step(.8, s2)); pr = vec4f(.2, .85, .55, .02); spc = mix(vec3f(.5, .35, 1.), vec3f(.2, 1., .7), step(.6, hsel)); shp = vec2f(.7, .6); wav = 2.4; }
-    case 4 { col = mix(vec3f(.30, .15, .02), vec3f(.42, .25, .04), s1); pr = vec4f(.2, 1., .1, 0.); spc = vec3f(1., .85, .5); shp = vec2f(.5, .4); wav = 1.8; }
-    case 5 { col = mix(vec3f(.85, .05, .40), vec3f(.60, .10, .80), step(.7, s1)); col = mix(col, vec3f(.95, .25, .55), step(.75, s2)); pr = vec4f(.22, .8, 0., .30); spc = vec3f(1., .35, .8); shp = vec2f(.6, .6); fls = 2.; }
-    case 6 { col = mix(vec3f(.80, .16, .16), vec3f(.92, .36, .42), s1); pr = vec4f(.06, 1., 0., .10); spc = vec3f(1., .5, .5); shp = vec2f(.4, .3); wav = 2.; }
-    default { col = mix(vec3f(.05, .40, .36), vec3f(.10, .52, .58), s1); pr = vec4f(.1, .9, .2, .04); spc = vec3f(.3, 1., .9); shp = vec2f(.6, .5); }
+    case 2 { col = mix(vec3f(.035, .16, .055), vec3f(.10, .34, .10), s1); col = mix(col, vec3f(.22, .34, .08), step(.85, s2)); pr = vec4f(.05, 1.0, .08, 0.); spc = vec3f(.48, .82, .22); shp = vec2f(.45, .35); wav = 2.2; }
+    case 3 { col = mix(vec3f(.012, .055, .025), vec3f(.035, .12, .045), s1); col = mix(col, vec3f(.08, .18, .035), step(.8, s2)); pr = vec4f(.12, .85, .12, .01); spc = mix(vec3f(.34, .62, .16), vec3f(.28, .82, .30), step(.6, hsel)); shp = vec2f(.7, .6); wav = 2.0; }
+    case 4 { col = mix(vec3f(.16, .20, .035), vec3f(.34, .38, .07), s1); pr = vec4f(.12, 1., .04, 0.); spc = vec3f(.68, .78, .22); shp = vec2f(.5, .4); wav = 1.6; }
+    case 5 { col = mix(vec3f(.16, .42, .035), vec3f(.38, .62, .08), step(.7, s1)); col = mix(col, vec3f(.58, .72, .12), step(.75, s2)); pr = vec4f(.16, .8, .04, .06); spc = vec3f(.72, .92, .24); shp = vec2f(.6, .6); fls = 1.5; }
+    case 6 { col = mix(vec3f(.08, .24, .035), vec3f(.24, .40, .06), s1); pr = vec4f(.06, 1., .02, .02); spc = vec3f(.48, .72, .16); shp = vec2f(.4, .3); wav = 1.8; }
+    default { col = mix(vec3f(.035, .24, .07), vec3f(.10, .44, .12), s1); pr = vec4f(.08, .9, .08, .02); spc = vec3f(.32, .82, .24); shp = vec2f(.6, .5); }
   }
   pr.x = step(hs(s1 * 91.7 + s2 * 37.1 + i.b.x), pr.x);
   let k = (i.c.w - .3) * 2.0 + sin(t * (.8 + s1) * fls + s2 * 40. + hA * .25) * .10 * fls;
@@ -498,34 +498,66 @@ struct GO { @builtin(position) cp: vec4f, @location(0) uv: vec2f, @location(1) @
 `;
 
 // ---------------------------------------------------------------- fish + mantas
+const FISH_DEBUG_MODE = location.pathname.endsWith('/dev.html') && new URLSearchParams(location.search).get('fishdebug') === '1';
+const FISH_FREEZE_MODE = FISH_DEBUG_MODE && new URLSearchParams(location.search).get('freezeFish') === '1';
 const W_ANIM = S_B + /*wgsl*/`
+const FISH_DEBUG_MODE: bool = ${FISH_DEBUG_MODE};
+const FISH_FREEZE_MODE: bool = ${FISH_FREEZE_MODE};
 struct VI { @location(0) p: vec3f, @location(1) n: vec4f, @location(2) a: vec4f, @location(3) b: vec4f };
 struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) op: vec3f, @location(3) @interpolate(flat) sd: f32, @location(4) lt: f32 };
-@vertex fn vsFish(i: VI) -> VO {
-  var o: VO;
+struct FVO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) op: vec3f,
+  @location(3) @interpolate(flat) sd: f32, @location(4) lt: f32, @location(5) @interpolate(flat) kind: u32 };
+@vertex fn vsFish(i: VI) -> FVO {
+  var o: FVO;
   let s = i.b.x; let h = vec3f(hs(s), hs(s + .37), hs(s + .71));
-  let R = i.a.w; let t = g.cam.w;
-  let ta = t * i.b.y + i.b.w * 6.3 + (h.x - .5) * (26. / R);
-  let ph = i.b.w * 17.;
-  let P = i.a.xyz + vec3f(R * cos(ta), 2.2 * sin(3. * ta + ph), R * .6 * sin(ta));
-  let T = normalize(vec3f(-R * sin(ta), 6.6 * cos(3. * ta + ph), R * .6 * cos(ta))) * sign(i.b.y);
+  let R = i.a.w; let t = select(g.cam.w, 0., FISH_FREEZE_MODE); let kind = u32(i.b.w);
+  var vertical = 0.68; var lateral = 1.; var tailRate = 4.5;
+  if (kind == 0u) { vertical = 0.12; lateral = 0.55; tailRate = 1.55; }
+  if (kind == 2u) { vertical = 0.24; lateral = 0.27; tailRate = 6.2; }
+  let ta = t * i.b.y + h.x * 6.2831853 + (h.y - .5) * (26. / max(R, 1.));
+  let ph = h.z * 6.2831853;
+  var P = i.a.xyz + vec3f(R * cos(ta), 2.2 * vertical * sin(3. * ta + ph), R * .6 * sin(ta));
+  var T = normalize(vec3f(-R * sin(ta), 6.6 * vertical * cos(3. * ta + ph), R * .6 * cos(ta))) * sign(i.b.y);
+  if (kind == 3u) { P = i.a.xyz; T = vec3f(0., 0., 1.); }
   let S = normalize(cross(vec3f(0., 1., 0.), T)); let Up = cross(T, S);
-  let off = S * ((h.y - .5) * 5. + sin(t * .6 + s * 40.) * .5) + Up * ((h.z - .5) * 3.2 + cos(t * .5 + s * 31.) * .4);
-  var l = i.p * i.b.z * (.75 + .5 * h.z);
-  l.z += sin(t * 9. + s * 50. + l.x * 5.) * .22 * (.25 * i.b.z - l.x);
+  var off = S * (((h.y - .5) * 3. + sin(t * .6 + s * 40.) * .3) * lateral) + Up * (((h.z - .5) * 2. + cos(t * .5 + s * 31.) * .25) * vertical);
+  if (kind == 3u) { off = vec3f(0.); }
+  // Charales already use the former fishdebug size in normal mode, so don't enlarge them twice.
+  let visualScale = select(1., 2., FISH_DEBUG_MODE && kind != 1u);
+  var l = i.p * i.b.z * (.75 + .5 * h.z) * visualScale;
+  if (kind == 0u) { l.y *= 2.5; l.z *= 2.1; }
+  if (kind != 3u) { l.z += sin(t * tailRate + s * 50. + l.x * 5.) * .22 * (.25 * i.b.z - l.x); }
   let w = P + off + T * l.x + Up * l.y + S * l.z;
-  o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = T * i.n.x + Up * i.n.y + S * i.n.z; o.op = i.p; o.sd = s;
+  o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = T * i.n.x + Up * i.n.y + S * i.n.z; o.op = i.p; o.sd = s; o.kind = kind;
   o.lt = shadow1(w);
   return o;
 }
-@fragment fn fsFish(i: VO) -> @location(0) vec4f {
+@fragment fn fsFish(i: FVO) -> @location(0) vec4f {
   let n = normalize(i.n); let L = g.sun.xyz; let V = normalize(g.cam.xyz - i.wp);
   let z = zone(i.wp); let vv = vol(i.wp);
-  var alb = mix(vec3f(.50, .68, .80), vec3f(.10, .22, .40), ss(-.05, .2, i.op.y));
-  alb = mix(alb, vec3f(.95, .8, .3), step(.86, fract(i.sd * 7.7)) * .6);
+  let tint = fract(i.sd * 7.7);
+  var alb = vec3f(.3, .4, .2); var shine = 1.;
+  if (i.kind == 3u) {
+    alb = vec3f(2.0, .04, .72);
+    shine = 0.;
+  } else if (i.kind == 0u) {
+    alb = mix(vec3f(.20, .21, .09), vec3f(.54, .43, .17), .28 + .58 * tint);
+    alb = mix(alb, vec3f(.12, .15, .065), ss(.05, .16, i.op.y) * .25);
+    shine = .8;
+  } else if (i.kind == 1u) {
+    alb = mix(vec3f(.34, .43, .42), vec3f(.72, .77, .67), .18 + .42 * tint);
+    alb = mix(alb, vec3f(.19, .27, .25), step(.1, fract(i.sd * 23.)) * .12);
+    shine = 1.15;
+  } else {
+    alb = mix(vec3f(.008, .012, .004), vec3f(.035, .055, .015), .24 + .52 * tint);
+    shine = .18;
+  }
+  if (FISH_DEBUG_MODE && i.kind == 0u) { alb = vec3f(1.15, .30, .025); shine = 0.; }
+  if (FISH_DEBUG_MODE && i.kind == 1u) { alb = vec3f(.08, 1.05, 1.15); shine = 0.; }
+  if (FISH_DEBUG_MODE && i.kind == 2u) { alb = vec3f(1.1, .95, .025); shine = 0.; }
   let E = sunE(i.wp.y, z) * i.lt;
   var c = alb * (E * (.25 + .75 * sat(dot(n, L))) + amb(i.wp, n, vv.g, z) * 1.3);
-  c += E * pow(sat(dot(n, normalize(V + L))), 24.) * 1.6 + vec3f(.3, .6, .7) * pow(1. - sat(dot(n, V)), 3.) * .25 * vv.g;
+  c += E * pow(sat(dot(n, normalize(V + L))), 24.) * 1.25 * shine + vec3f(.28, .48, .24) * pow(1. - sat(dot(n, V)), 3.) * .18 * vv.g;
   return fin(fog(c, i.wp, z));
 }
 @vertex fn vsManta(i: VI) -> VO {

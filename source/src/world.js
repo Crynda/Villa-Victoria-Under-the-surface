@@ -41,6 +41,11 @@ const magAt = (x, z) => {
   for (const p of MAGENTA) m = max(m, sstep(p[2], p[2] * 0.45, hypot(x - p[0], z - p[1])));
   return m * sstep(0.3, 0.55, fbm(x * 0.17, 1, z * 0.17, 2) + m * 0.25);
 };
+const plantAt = (x, z) => {
+  let m = sstep(0.54, 0.66, fbm(x * 0.03, 7, z * 0.03, 3)) * 0.12;
+  for (const p of MAGENTA) m = max(m, sstep(p[2] * 0.62, p[2] * 0.38, hypot(x - p[0], z - p[1])));
+  return m * sstep(0.3, 0.55, fbm(x * 0.17, 1, z * 0.17, 2) + m * 0.25);
+};
 
 function primBuffer() {
   const a = [];
@@ -116,6 +121,38 @@ function makeWorld(D, T, flyPts, POSES) {
     const e = 0.6; let nx = Dw(x - e, y, z) - Dw(x + e, y, z), ny = Dw(x, y - e, z) - Dw(x, y + e, z), nz = Dw(x, y, z - e) - Dw(x, y, z + e);
     const l = hypot(nx, ny, nz) || 1; return [nx / l, ny / l, nz / l];
   };
+  // Approximate shoreline distance from emerged terrain at the current water plane.
+  // The grid derives from the terrain dimensions, so it follows later basin edits.
+  const HN = 64, HN2 = HN * HN, HSX = NX / HN * VS, HSZ = NZ / HN * VS, HSD = hypot(HSX, HSZ);
+  const shoreDist = new Float32Array(HN2).fill(1e6);
+  for (let z = 0; z < HN; z++) for (let x = 0; x < HN; x++) {
+    const wx = OX + (x + 0.5) * HSX, wz = OZ + (z + 0.5) * HSZ;
+    if (Dw(wx, 0, wz) > 0) shoreDist[x + z * HN] = 0;
+  }
+  for (let z = 0; z < HN; z++) for (let x = 0; x < HN; x++) {
+    const i = x + z * HN;
+    if (x) shoreDist[i] = min(shoreDist[i], shoreDist[i - 1] + HSX);
+    if (z) shoreDist[i] = min(shoreDist[i], shoreDist[i - HN] + HSZ);
+    if (x && z) shoreDist[i] = min(shoreDist[i], shoreDist[i - HN - 1] + HSD);
+    if (x + 1 < HN && z) shoreDist[i] = min(shoreDist[i], shoreDist[i - HN + 1] + HSD);
+  }
+  for (let z = HN - 1; z >= 0; z--) for (let x = HN - 1; x >= 0; x--) {
+    const i = x + z * HN;
+    if (x + 1 < HN) shoreDist[i] = min(shoreDist[i], shoreDist[i + 1] + HSX);
+    if (z + 1 < HN) shoreDist[i] = min(shoreDist[i], shoreDist[i + HN] + HSZ);
+    if (x + 1 < HN && z + 1 < HN) shoreDist[i] = min(shoreDist[i], shoreDist[i + HN + 1] + HSD);
+    if (x && z + 1 < HN) shoreDist[i] = min(shoreDist[i], shoreDist[i + HN - 1] + HSD);
+  }
+  const shoreAt = (x, z) => shoreDist[clamp(floor((x - OX) / HSX), 0, HN - 1) + HN * clamp(floor((z - OZ) / HSZ), 0, HN - 1)];
+  const waterFloorAt = (x, z) => {
+    const f = floorsAt(x, z);
+    for (let i = 0; i < f.length; i += 2) if (f[i] < -0.5 && f[i + 1] > 0.5 && f[i] + f[i + 1] > -1.5) return { y: f[i], depth: -f[i] };
+    return null;
+  };
+  const habitatAt = (x, z) => {
+    const floor = waterFloorAt(x, z); if (!floor) return null;
+    return { x, z, floor: floor.y, depth: floor.depth, shore: shoreAt(x, z), flat: grad(x, floor.y, z)[1] };
+  };
   // march from outside along -n to the surface
   const snap = (x, y, z, n) => {
     let px = x + n[0] * 2.5, py = y + n[1] * 2.5, pz = z + n[2] * 2.5, prev = Dw(px, py, pz);
@@ -134,10 +171,10 @@ function makeWorld(D, T, flyPts, POSES) {
   // --- kelp columns
   const column = (x, y, z, H, kind, dens = 1) => {
     const strands = 2 + (rnd() < 0.6) + (rnd() < 0.3), ph = rnd() * TAU, tw = rr(0.1, 0.28), sr = rr(0.2, 0.55), sc = rr(0.75, 1.25);
-    const la = rnd() * TAU, lm = rr(0, 0.11), full = rr(0.55, 1.3) * dens;
+    const la = rnd() * TAU, lm = rr(0, 0.11), full = rr(0.55, 1.3) * dens * 0.65;
     const stem = (s, h) => { const a = ph + s * TAU / strands + h * tw, r = sr * (1 - 0.6 * h / H), ln = lm * h * h / H; return [x + cos(a) * r + cos(la) * ln, z + sin(a) * r + sin(la) * ln, a]; };
     for (let s = 0; s < strands; s++) for (let h = 0; h < H - 1; h += 1.7) { const p = stem(s, h); leaf(big, p[0], y + h, p[1], 2.1, p[2] + PI / 2, 0.1, 0.17, h, 1, rnd(), rnd(), 0.3); }
-    const n = floor(H * 30 * full);
+    const n = floor(H * 18 * full);
     for (let i = 0; i < n; i++) {
       const t = pow(rnd(), 0.9), h = t * H, p = stem((rnd() * strands) | 0, h);
       const L = ((0.55 + 0.75 * rnd() * rnd()) * (1 - 0.5 * t * t) * sc + 0.25) * (kind === 1 ? 1.25 : 1.15);
@@ -145,18 +182,18 @@ function makeWorld(D, T, flyPts, POSES) {
       const type = kind === 1 ? (rnd() < 0.8 ? 3 : 4) : kind === 2 ? (rnd() < 0.5 ? 4 : 0) : 0;
       leaf(big, p[0], y + h, p[1], L, rnd() * TAU, tilt, L * (kind === 1 ? rr(0.09, 0.13) : rr(0.15, 0.21)) + 0.03, h, type, rnd(), rnd(), rr(0.38, 0.95));
     }
-    for (let i = floor(H * (kind === 1 ? 16 : 13)); i > 0; i--) { const h = rnd() * H, a = rnd() * TAU, r = rr(0.15, 0.8) * (1 - 0.5 * h / H), ln = lm * h * h / H; glint(x + cos(a) * r + cos(la) * ln, y + h, z + sin(a) * r + sin(la) * ln, h, rnd(), kind === 1 ? rnd() : rnd() * 0.6, rr(0.018, 0.05), 0); }
+    for (let i = floor(H * (kind === 1 ? 10 : 8)); i > 0; i--) { const h = rnd() * H, a = rnd() * TAU, r = rr(0.15, 0.8) * (1 - 0.5 * h / H), ln = lm * h * h / H; glint(x + cos(a) * r + cos(la) * ln, y + h, z + sin(a) * r + sin(la) * ln, h, rnd(), kind === 1 ? rnd() : rnd() * 0.6, rr(0.018, 0.05), 0); }
     // light absorption footprint for the skylight bake
     const hx = round((x - OX) / VS / 2), hz = round((z - OZ) / VS / 2);
     for (let hy = floor((y - OY) / VS / 2); hy <= floor((y + H - OY) / VS / 2); hy++) {
       if (hy >= 0 && hy < NY / 2 && hx > 0 && hx < NX / 2 - 1 && hz > 0 && hz < NZ / 2 - 1) kelpAbs[hx + NX / 2 * (hy + NY / 2 * hz)] += 0.17;
     }
   };
-  const KELPZ = [[-32, -5, 13, 0.85], [0, -86, 46, 1], [72, -26, 27, 0.9], [-60, -4, 11, 0.8], [0, -36, 12, 0.55], [-17, -8, 6, 0.8], [15, -8, 6, 0.8], [-4, 120, 20, 0.4], [-45, -63, 15, 0.9], [62, -26, 12, 0.9], [-100, 70, 30, 0.8], [100, 60, 30, 0.8], [-95, -90, 32, 0.8], [105, -85, 30, 0.7]];
+  const KELPZ = [[-32, -5, 9, 0.52], [0, -86, 30, 0.68], [72, -26, 18, 0.56], [-60, -4, 8, 0.48], [0, -36, 9, 0.38], [-17, -8, 5, 0.45], [15, -8, 5, 0.45], [-4, 120, 12, 0.28], [-45, -63, 10, 0.52], [62, -26, 8, 0.48], [-100, 70, 19, 0.50], [100, 60, 19, 0.50], [-95, -90, 19, 0.48], [105, -85, 18, 0.42]];
   const NOKELP = [[-5, -106.5, 8], [4.6, -109.4, 10], [14.2, -112.3, 12], [-26, -100, 6], [-20.5, -101.7, 4.5], [-14.8, -104.5, 6], [-7.5, -107.8, 7], [4, 112, 11], [2, 4, 15], [42, 22, 12], [6, 78, 19], [-58, -16, 8], [9, -66, 9], [8, -76, 8]];
   const kelpDens = (x, z) => {
     for (const p of NOKELP) if (hypot(x - p[0], z - p[1]) < p[2]) return 0;
-    let d = sstep(0.52, 0.64, fbm(x * 0.022, 4, z * 0.022, 3)) * 0.5;
+    let d = sstep(0.52, 0.64, fbm(x * 0.022, 4, z * 0.022, 3)) * 0.12;
     for (const p of KELPZ) d = max(d, p[3] * sstep(p[2], p[2] * 0.75, hypot(x - p[0], z - p[1])));
     return d;
   };
@@ -172,7 +209,7 @@ function makeWorld(D, T, flyPts, POSES) {
     if (grad(x, y, z)[1] < 0.55) return;
     if (!force && flyPts.some((p) => hypot(x - p[0], z - p[2]) < 5)) return;
     occ.add(key);
-    column(x, y - 0.3, z, min(f[i + 1] - rr(0.8, 5), force ? rr(30, 42) : rr(15, 40)), kind, dens);
+    column(x, y - 0.3, z, min(f[i + 1] - rr(0.8, 5), force ? rr(18, 26) : rr(9, 25)), kind, dens);
   };
   // hand-placed columns framing the viewpoints: x, z, kind, density
   for (const p of [[...rel(0, 11, -8.5), 0], [...rel(0, 16, -10.5), 0], [...rel(0, 21, -9), 0], [...rel(0, 9, 7), 0], [...rel(0, 14, 9.5), 0], [...rel(0, 19, 8), 0], [...rel(0, 26, 6), 0],
@@ -195,29 +232,29 @@ function makeWorld(D, T, flyPts, POSES) {
       leaf(big, x + cos(a) * r, y - 0.15, z + sin(a) * r, L, a, rr(0.05, tmax), rr(wmin, wmax), sway, type, rnd(), rnd(), rr(0.3, 0.8));
     }
   };
-  const HOT = [[0, 5, 30], [42, 30, 24], [6, 82, 34], [-58, 10, 24], [4, -88, 30], [-36, 44, 18], [-46, -60, 20]];
-  const hot = (x, z) => { let h = 0.4; for (const p of HOT) h = max(h, sstep(p[2], p[2] * 0.4, hypot(x - p[0], z - p[1]))); return h; };
+  const HOT = [[0, 5, 20], [42, 30, 16], [6, 82, 23], [-58, 10, 16], [4, -88, 20], [-36, 44, 13], [-46, -60, 14]];
+  const hot = (x, z) => { let h = 0.12; for (const p of HOT) h = max(h, sstep(p[2], p[2] * 0.4, hypot(x - p[0], z - p[1]))); return h; };
   rseed(3);
   for (let i = 0; i < 40000; i++) {
     const k = pickV(), x = T.wp[k], y = T.wp[k + 1], z = T.wp[k + 2], ny = T.wn[k + 1];
     if (hypot(x, z) > 172 || y > -6) continue;
     const h = hot(x, z), zp = zoneP(x, z), u = rnd();
     if (nearFly(x, y, z, 4) || hypot(x + 1, z - 2) < 9 || nearPose(x, z, 8)) continue;
-    if (ny > 0.75 && u < 0.10 * h) cluster(x, y, z, 8 + rnd() * 14 | 0, 2, 1.0, 3.0, 0.13, 0.26, 0.6, 2.5);
-    else if (ny > 0.6 && u < 0.10 * h + 0.07 * max(zp, h * 0.4)) cluster(x, y, z, 10 + rnd() * 18 | 0, rnd() < 0.8 ? 3 : 4, 0.9, 2.6, 0.14, 0.28, 0.9, 1.5);
-    else if (ny < -0.35 && u < 0.5 * max(zp, 0.2)) { // hanging fronds
-      const n = 12 + rnd() * 20 | 0;
-      for (let j = 0; j < n; j++) leaf(big, x + rr(-0.6, 0.6), y + 0.2, z + rr(-0.6, 0.6), rr(0.8, 3.2), rnd() * TAU, PI - rr(0, 0.4), rr(0.08, 0.18), 0, zp > 0.3 || rnd() < 0.5 ? 6 : 0, rnd(), rnd(), rr(0.3, 0.6));
-    } else if (ny > -0.2 && ny < 0.8 && u < 0.07) { // wall tufts
-      const yaw = atan2(T.wn[k + 2], T.wn[k]), n = 5 + rnd() * 7 | 0;
+    if (ny > 0.75 && u < 0.06 * h) cluster(x, y, z, 5 + rnd() * 9 | 0, 2, 0.7, 2.0, 0.12, 0.23, 0.6, 2.0);
+    else if (ny > 0.6 && u < 0.06 * h + 0.035 * max(zp, h * 0.4)) cluster(x, y, z, 6 + rnd() * 10 | 0, rnd() < 0.8 ? 3 : 4, 0.6, 1.8, 0.12, 0.23, 0.9, 1.3);
+    else if (ny < -0.35 && u < 0.18 * max(zp, 0.2)) { // hanging fronds
+      const n = 6 + rnd() * 10 | 0;
+      for (let j = 0; j < n; j++) leaf(big, x + rr(-0.6, 0.6), y + 0.2, z + rr(-0.6, 0.6), rr(0.6, 2.2), rnd() * TAU, PI - rr(0, 0.4), rr(0.08, 0.18), 0, zp > 0.3 || rnd() < 0.5 ? 6 : 0, rnd(), rnd(), rr(0.3, 0.6));
+    } else if (ny > -0.2 && ny < 0.8 && u < 0.035) { // wall tufts
+      const yaw = atan2(T.wn[k + 2], T.wn[k]), n = 3 + rnd() * 5 | 0;
       for (let j = 0; j < n; j++) leaf(big, x, y, z, rr(0.5, 1.4), yaw + rr(-0.9, 0.9), rr(0.3, 1.1), rr(0.06, 0.12), 0.5, zp > 0.4 && rnd() < 0.6 ? 3 : 0, rnd(), rnd(), rr(0.2, 0.6));
     }
   }
   // --- ground cover: dense carpets of small tufts in the magenta patches
   rseed(4);
-  for (const p of MAGENTA) for (let i = p[2] * p[2] * PI * 45; i > 0; i--) {
-    const a = rnd() * TAU, r = sqrt(rnd()) * p[2], x = p[0] + cos(a) * r, z = p[1] + sin(a) * r;
-    if (rnd() > magAt(x, z) + 0.12 || nearPose(x, z)) continue;
+  for (const p of MAGENTA) for (let i = (p[2] * 0.62) ** 2 * PI * 16; i > 0; i--) {
+    const radius = p[2] * 0.62, a = rnd() * TAU, r = sqrt(rnd()) * radius, x = p[0] + cos(a) * r, z = p[1] + sin(a) * r;
+    if (rnd() > plantAt(x, z) + 0.05 || nearPose(x, z)) continue;
     const f = floorsAt(x, z); if (!f.length) continue;
     const y = f[f.length - 2]; if (grad(x, y, z)[1] < 0.7) continue;
     const nl = 2 + (rnd() * 3 | 0), yw = rnd() * TAU;
@@ -226,24 +263,24 @@ function makeWorld(D, T, flyPts, POSES) {
     if (rnd() < 0.3) glint(x, y + rr(0.08, 0.22), z, 0, rnd(), 0.82 + rnd() * 0.18, rr(0.01, 0.02), 0);
   }
   rseed(5);
-  for (let i = 0; i < 620000; i++) {
+  for (let i = 0; i < 360000; i++) {
     const k = pickV(), ny = T.wn[k + 1];
     if (ny < 0.72) continue;
     const x = T.wp[k] + rr(-0.45, 0.45), z = T.wp[k + 2] + rr(-0.45, 0.45), y = T.wp[k + 1];
     if (hypot(x, z) > 170 || nearPose(x, z)) continue;
-    const m = magAt(x, z), zp = zoneP(x, z), u = rnd();
-    if (m > 0.3 && u < m * 0.9) for (let j = 0; j < 4; j++) leaf(small, x + rr(-0.1, 0.1), y - 0.05, z + rr(-0.1, 0.1), rr(0.12, 0.34), rnd() * TAU, rr(0.05, 0.75), rr(0.04, 0.08), 0, 5, rnd(), rnd(), rr(0.3, 0.7));
-    else if (u < m * 0.9 + 0.5 * max(zp, hot(x, z)) * sstep(0.42, 0.6, fbm(x * 0.09, 9, z * 0.09, 2))) for (let j = 0; j < 3; j++) leaf(small, x + rr(-0.1, 0.1), y - 0.05, z + rr(-0.1, 0.1), rr(0.25, 0.7), rnd() * TAU, rr(0.1, 0.8), rr(0.05, 0.1), 0, 7, rnd(), rnd(), rr(0.3, 0.8));
+    const m = plantAt(x, z), zp = zoneP(x, z), u = rnd();
+    if (m > 0.4 && u < m * 0.6) for (let j = 0; j < 4; j++) leaf(small, x + rr(-0.1, 0.1), y - 0.05, z + rr(-0.1, 0.1), rr(0.12, 0.34), rnd() * TAU, rr(0.05, 0.75), rr(0.04, 0.08), 0, 5, rnd(), rnd(), rr(0.3, 0.7));
+    else if (u < m * 0.6 + 0.22 * max(zp, hot(x, z)) * sstep(0.42, 0.6, fbm(x * 0.09, 9, z * 0.09, 2))) for (let j = 0; j < 3; j++) leaf(small, x + rr(-0.1, 0.1), y - 0.05, z + rr(-0.1, 0.1), rr(0.25, 0.7), rnd() * TAU, rr(0.1, 0.8), rr(0.05, 0.1), 0, 7, rnd(), rnd(), rr(0.3, 0.8));
   }
 
   // --- sponges and coral (clustered on rock)
   const spots = [];
-  const ZS = [[-58, 8, 30, 1], [0, 0, 30, 0.7], [6, 84, 36, 0.9], [4, -88, 22, 0.6], [44, 20, 24, 0.5]];
-  const zw = (x, z) => { let h = 0.45; for (const p of ZS) h = max(h, p[3] * sstep(p[2], p[2] * 0.4, hypot(x - p[0], z - p[1]))); return h; };
+  const ZS = [];
+  const zw = (x, z) => { let h = 0; for (const p of ZS) h = max(h, p[3] * sstep(p[2], p[2] * 0.4, hypot(x - p[0], z - p[1]))); return h; };
   rseed(6);
-  for (let i = 0; i < 13000; i++) {
+  for (let i = 0; ZS.length && i < 13000; i++) {
     const k = pickV(), x = T.wp[k], y = T.wp[k + 1], z = T.wp[k + 2];
-    if (hypot(x, z) > 170 || y > -8 || T.wn[k + 1] < -0.15 || rnd() > zw(x, z) || nearFly(x, y, z, 3)) continue;
+    if (ZS.length === 0 || hypot(x, z) > 170 || y > -8 || T.wn[k + 1] < -0.15 || rnd() > zw(x, z) || nearFly(x, y, z, 3)) continue;
     const n0 = [T.wn[k], T.wn[k + 1], T.wn[k + 2]], [t1, t2] = tangent(n0), coral = T.wn[k + 1] > 0.85 || rnd() < 0.35, cnt = coral ? 2 + rnd() * 5 | 0 : 3 + rnd() * 9 | 0, sd = rnd();
     for (let j = 0; j < cnt; j++) {
       const a = rr(-1, 1) * (0.5 + cnt * 0.13), b = rr(-1, 1) * (0.5 + cnt * 0.13);
@@ -258,7 +295,8 @@ function makeWorld(D, T, flyPts, POSES) {
 
   // dense sponge / coral gardens: x, z, radius, count
   rseed(7);
-  for (const g of [[-68, -6, 9, 260], [-66, 6, 7, 160], [16, 72, 7, 200], [-6, 74, 6, 120], [-13, -2, 6, 80], [8, -88, 8, 160], [44, 12, 7, 120], [-62, 22, 6, 140], [-47, 40, 6, 140], [-30, 47, 6, 120], [-12, 48, 5, 100], [14, 28, 6, 140], [28, 45, 6, 120], [-36, -76, 6, 130], [-49, -58, 6, 130], [-58, -38, 6, 120]]) {
+  // Disabled for the freshwater pass; keep the generator and mesh references available for later reuse.
+  for (const g of []) {
     let made = 0;
     for (let i = 0; i < 400000 && made < g[3]; i++) {
       const k = pickV(), x = T.wp[k], y = T.wp[k + 1], z = T.wp[k + 2];
@@ -363,16 +401,104 @@ function makeWorld(D, T, flyPts, POSES) {
     gm[o] = magAt(x, z) * 255; gm[o + 2] = zoneP(x, z) * 255; gm[o + 3] = sstep(0.42, 0.6, fbm(x * 0.04, 3, z * 0.04, 3)) * 255;
   }
 
-  // --- fish schools + mantas
+  // --- freshwater fish: habitat samples use terrain depth and an approximate shoreline distance
   const fish = [];
   rseed(14);
-  const SCH = [[-2, -36, -10, 15, 520, 0.3, 1, 0.945], [8, -30, -70, 22, 420, 0.32, -1], [48, -30, 14, 18, 360, 0.3, 1], [-58, -30, -8, 11, 420, 0.28, -1, 0.3], [8, -36, 84, 16, 320, 0.28, 1],
-    [-90, -28, -70, 25, 300, 0.3, 1], [95, -30, 70, 25, 300, 0.3, -1], [0, -22, 20, 30, 380, 0.34, -1], [-30, -30, -100, 18, 300, 0.3, 1], [16, -36, 30, 12, 300, 0.3, 1], [-48, -34, -58, 12, 300, 0.3, -1], [-45, -35, 38, 14, 320, 0.3, 1]];
-  for (const s of SCH) { const ss = s[7] === undefined ? rnd() : s[7]; for (let i = 0; i < s[4]; i++) fish.push(s[0], s[1], s[2], s[3], rnd(), s[6] * 1.9 / s[3], s[5], ss); }
+  const fishAudit = location.pathname.endsWith('/dev.html');
+  const fishDiag = fishAudit && new URLSearchParams(location.search).get('fishdiag') === '1';
+  const fishDebug = fishAudit && new URLSearchParams(location.search).get('fishdebug') === '1';
+  const fishStats = {
+    carp: { planned: 24, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
+    charal: { planned: 12, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
+    juvenile: { planned: 24, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
+  };
+  const habitats = [];
+  for (let z = 0; z < HN; z++) for (let x = 0; x < HN; x++) {
+    const wx = OX + (x + 0.5) * HSX, wz = OZ + (z + 0.5) * HSZ, h = habitatAt(wx, wz);
+    if (h && h.depth > 2.5) habitats.push(h);
+  }
+  const shallowPool = habitats.filter((h) => h.depth >= 3 && h.depth <= 18 && h.shore <= 42);
+  const shoreCarpPool = habitats.filter((h) => h.depth >= 5 && h.shore <= 36 && h.flat > 0.55);
+  const driftCarpPool = habitats.filter((h) => h.depth >= 10 && h.shore > 18 && h.flat > 0.4);
+  const charalPool = habitats.filter((h) => h.depth >= 11 && h.shore > 6);
+  const shallowFallback = habitats.filter((h) => h.depth >= 3 && h.depth <= 24).sort((a, b) => a.shore + a.depth * 0.35 - b.shore - b.depth * 0.35).slice(0, 512);
+  const carpFallback = habitats.filter((h) => h.depth >= 5 && h.shore <= 72);
+  const vegetatedShallowPool = shallowPool.filter((h) => plantAt(h.x, h.z) > 0.18);
+  const juvenilePool = vegetatedShallowPool.length ? vegetatedShallowPool : shallowPool;
+  const fishSite = (pool, kind, r0, r1, pad) => {
+    if (!pool.length) return null;
+    const yAt = (h) => h.floor + (kind === 0 ? min(3, max(2, h.depth * 0.12)) : h.depth * (kind === 1 ? 0.52 : 0.58));
+    const safe = (h, y, r) => {
+      if (y + pad >= -0.25) return false;
+      const travel = r + 2.4; // covers the shader's lateral schooling offset and fish body length
+      for (let j = 0; j < 8; j++) {
+        const a = j * TAU / 8, f = waterFloorAt(h.x + cos(a) * travel, h.z + sin(a) * travel * 0.6);
+        if (!f || y - pad <= f.y) return false;
+      }
+      return true;
+    };
+    for (let tries = 0, n = min(pool.length, 240); tries < n; tries++) {
+      const h = pool[(rnd() * pool.length) | 0], y = yAt(h); let r = rr(r0, r1);
+      for (let shrink = 0; shrink < 5; shrink++, r *= 0.65) if (safe(h, y, r)) return { h, y, r };
+    }
+    return null;
+  };
+  const addSchool = (name, kind, count, pool, fallback, r0, r1, size0, size1, speed0, speed1, pad) => {
+    const stats = fishStats[name];
+    stats.attempted++;
+    let site = fishSite(pool, kind, r0, r1, pad);
+    if (!site && fallback !== pool) site = fishSite(fallback, kind, r0, r1, pad);
+    if (!site) {
+      stats.rejected++;
+      if (!pool.length && !fallback.length) stats.emptyPoolsRejected++;
+      else stats.unsafeSitesRejected++;
+      return false;
+    }
+    const speed = rr(speed0, speed1);
+    for (let i = 0; i < count; i++) fish.push(site.h.x, site.y, site.h.z, site.r * rr(0.96, 1.04), rnd(), speed * rr(0.96, 1.04), rr(size0, size1), kind);
+    stats.accepted++; stats.individuals += count;
+    const group = { x: +site.h.x.toFixed(2), y: +site.y.toFixed(2), z: +site.h.z.toFixed(2), orbit: +site.r.toFixed(2), depth: +site.h.depth.toFixed(2), shore: +site.h.shore.toFixed(2), count, size: [size0, size1], speed: +speed.toFixed(3) };
+    stats.groups.push(group);
+    if (stats.samples.length < 3) stats.samples.push(group);
+    return true;
+  };
+  // 70 carps: 50 in nearshore schools, plus solitary and paired fish drifting in deeper quiet areas.
+  for (let g = 0; g < 10; g++) addSchool('carp', 0, 5, shoreCarpPool, carpFallback, 1.5, 2.8, 0.98, 1.30, 0.025, 0.050, 1.2);
+  for (let g = 0; g < 8; g++) addSchool('carp', 0, 1, driftCarpPool, carpFallback, 0.55, 1.25, 0.98, 1.30, 0.016, 0.032, 1.2);
+  for (let g = 0; g < 6; g++) addSchool('carp', 0, 2, driftCarpPool, carpFallback, 0.7, 1.5, 0.98, 1.30, 0.018, 0.036, 1.2);
+  // 480 charales in 12 coordinated schools of 40 at mid-water depth.
+  for (let g = 0; g < 12; g++) addSchool('charal', 1, 40, charalPool, habitats, 5.0, 9.0, 0.36, 0.50, 0.13, 0.21, 2.8);
+  // 360 juveniles in compact schools at shallow shore sites, preferring existing vegetation patches.
+  for (let g = 0; g < 24; g++) addSchool('juvenile', 2, 15, juvenilePool, shallowFallback, 0.55, 1.15, 0.10, 0.15, 0.24, 0.36, 0.9);
+  if (fishAudit) console.info('[fish audit] generation', {
+    habitatSamples: habitats.length,
+    candidatePools: { shallow: shallowPool.length, vegetatedShallow: vegetatedShallowPool.length, shoreCarp: shoreCarpPool.length, driftCarp: driftCarpPool.length, charal: charalPool.length },
+    categories: fishStats,
+    realIndividuals: fish.length / 8,
+    diagnosticMode: fishDiag,
+  });
+  if (fishDebug) {
+    const eye = [POSES[0][0], POSES[0][1] + gy(POSES[0][0], POSES[0][2]), POSES[0][2]];
+    const nearby = Object.entries(fishStats).flatMap(([category, s]) => s.groups.map((g) => ({ category, ...g, distance: +hypot(g.x - eye[0], g.y - eye[1], g.z - eye[2]).toFixed(2) })))
+      .sort((a, b) => a.distance - b.distance);
+    console.info('[fish debug] initial camera', eye);
+    console.info('[fish debug] nearest five group centers', nearby.slice(0, 5));
+    console.info('[fish debug] all accepted group centers', nearby);
+  }
+  // Five fixed, oversized sentinels near the initial view; bypass habitat filters and school motion.
+  if (fishDiag) {
+    const eye = [POSES[0][0], POSES[0][1] + gy(POSES[0][0], POSES[0][2]), POSES[0][2]];
+    const dx = POSES[0][3] - eye[0], dy = POSES[0][4] - eye[1], dz = POSES[0][5] - eye[2], dl = hypot(dx, dy, dz) || 1;
+    const cx = eye[0] + dx / dl * 5, cy = eye[1] + dy / dl * 5, cz = eye[2] + dz / dl * 5;
+    fish.length = 0;
+    for (let i = 0; i < 5; i++) fish.push(cx + (i - 2) * 1.1, cy, cz, 0, i * 0.17, 0, 6, 3);
+    console.info('[fish audit] diagnostic sentinels', { count: fish.length / 8, center: [cx, cy, cz], instanceStride: 8 });
+  }
+  // Manta instances are disabled; keep the mesh, buffer, ID and render pipeline alive for now.
   const mantas = [];
-  for (const m of [[1, -28, 3.5, 14, 3.012, 0.085, 3.6, 0.1], [49, -31, 24.5, 5, 0.029, -0.08, 3.7, 0.4], [0, -14, -80, 34, 0.3, 0.06, 5.2, 0.7], [-50, -18, 20, 26, 5, -0.075, 3.8, 0.55], [10, -16, 86, 26, 2.2, 0.07, 4.4, 0.85], [20, -11, -20, 46, 4.2, -0.045, 5.6, 0.25]]) mantas.push(...m);
 
   // --- drifting particles
+  rseed(15);
   const snow = new Float32Array(9000 * 4);
   for (let i = 0; i < snow.length; i++) snow[i] = rnd();
 
