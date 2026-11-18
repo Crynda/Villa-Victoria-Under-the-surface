@@ -87,7 +87,7 @@ function buildTerrain(D) {
 }
 
 // ---------------------------------------------------------------- instance stores
-function makeWorld(D, T, flyPts, POSES) {
+function makeWorld(D, T, flyPts, POSES, faunaLab = false) {
   const gi = (x, y, z) => x + NX * (y + NY * z);
   const smp = T.smp;
   const Dw = (x, y, z) => smp((x - OX) / VS, (y - OY) / VS, (z - OZ) / VS);
@@ -402,15 +402,21 @@ function makeWorld(D, T, flyPts, POSES) {
   }
 
   // --- freshwater fish: habitat samples use terrain depth and an approximate shoreline distance
-  const fish = [];
+  const fish = [], juvenileFish = [];
   rseed(14);
   const fishAudit = location.pathname.endsWith('/dev.html');
+  const carpFrontMode = faunaLab && fishAudit && new URLSearchParams(location.search).get('species') === 'carp' && new URLSearchParams(location.search).get('carpfront') === '1';
   const fishDiag = fishAudit && new URLSearchParams(location.search).get('fishdiag') === '1';
   const fishDebug = fishAudit && new URLSearchParams(location.search).get('fishdebug') === '1';
+  const FISH_SPEC = {
+    carp: { kind: 0, size: [0.36, 0.50], schoolSpeed: [0.035, 0.065], soloSpeed: [0.030, 0.048], pairSpeed: [0.032, 0.050] },
+    charal: { kind: 1, size: [0.10, 0.15], speed: [0.13, 0.21] },
+    juvenile: { kind: 2, size: [0.085, 0.125], speed: [0.24, 0.36] },
+  };
   const fishStats = {
-    carp: { planned: 24, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
-    charal: { planned: 12, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
-    juvenile: { planned: 24, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
+    carp: { planned: faunaLab ? 1 : 24, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
+    charal: { planned: 1, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
+    juvenile: { planned: faunaLab ? 2 : 24, attempted: 0, accepted: 0, rejected: 0, emptyPoolsRejected: 0, unsafeSitesRejected: 0, individuals: 0, samples: [], groups: [] },
   };
   const habitats = [];
   for (let z = 0; z < HN; z++) for (let x = 0; x < HN; x++) {
@@ -425,6 +431,7 @@ function makeWorld(D, T, flyPts, POSES) {
   const carpFallback = habitats.filter((h) => h.depth >= 5 && h.shore <= 72);
   const vegetatedShallowPool = shallowPool.filter((h) => plantAt(h.x, h.z) > 0.18);
   const juvenilePool = vegetatedShallowPool.length ? vegetatedShallowPool : shallowPool;
+  const openCharalPool = habitats.filter((h) => h.depth >= 12 && h.shore > 20);
   const fishSite = (pool, kind, r0, r1, pad) => {
     if (!pool.length) return null;
     const yAt = (h) => h.floor + (kind === 0 ? min(3, max(2, h.depth * 0.12)) : h.depth * (kind === 1 ? 0.52 : 0.58));
@@ -443,10 +450,56 @@ function makeWorld(D, T, flyPts, POSES) {
     }
     return null;
   };
-  const addSchool = (name, kind, count, pool, fallback, r0, r1, size0, size1, speed0, speed1, pad) => {
+  const labOrigin = [POSES[0][0], POSES[0][2]], labRadius = 58;
+  const localPool = (pool) => pool.filter((h) => hypot(h.x - labOrigin[0], h.z - labOrigin[1]) <= labRadius);
+  const labTaken = [];
+  const chooseLabSite = (pool, fallback, offset, kind, r0, r1, pad) => {
+    const target = [labOrigin[0] + offset[0], labOrigin[1] + offset[1]];
+    const preferred = localPool(pool), localFallback = localPool(fallback).filter((h) => !preferred.includes(h));
+    const pools = [preferred, localFallback, pool, fallback, habitats].filter((p) => p.length);
+    for (const source of pools) {
+      const spaced = source.filter((h) => labTaken.every((q) => hypot(h.x - q.x, h.z - q.z) >= 16));
+      const candidates = (spaced.length ? spaced : source.slice()).sort((a, b) => hypot(a.x - target[0], a.z - target[1]) - hypot(b.x - target[0], b.z - target[1]));
+      for (const h of candidates.slice(0, 240)) {
+        const site = kind === null ? null : fishSite([h], kind, r0, r1, pad);
+        if (kind !== null && !site) continue;
+        labTaken.push(h);
+        return site || { h, y: h.floor + h.depth * 0.5, r: 0 };
+      }
+    }
+    return null;
+  };
+  const labSites = faunaLab ? [
+    chooseLabSite(localPool(shoreCarpPool), shoreCarpPool, [-14, -10], 0, 0.5, 1.2, 0.9),
+    chooseLabSite(localPool(openCharalPool), charalPool, [14, -8], 1, 4.5, 6.5, 2.8),
+    chooseLabSite(localPool(juvenilePool), juvenilePool, [-3, 15], 2, 0.6, 1.0, 0.9),
+    chooseLabSite(localPool(habitats.filter((h) => h.depth >= 3 && h.depth <= 10 && h.shore <= 30)), shallowPool, [18, 10], null, 0, 0, 0),
+    chooseLabSite(localPool(habitats.filter((h) => h.depth >= 5 && h.depth <= 16 && plantAt(h.x, h.z) > 0.18)), vegetatedShallowPool.length ? vegetatedShallowPool : shallowPool, [-18, 16], null, 0, 0, 0),
+    chooseLabSite(localPool(habitats.filter((h) => h.depth >= 16 && h.shore > 30)), charalPool, [3, -26], null, 0, 0, 0),
+  ] : [];
+  const labZones = faunaLab ? labSites.map((site, i) => {
+    const h = site.h;
+    const targetY = i < 3 ? site.y : i === 3 || i === 5 ? h.floor + 1.4 : h.floor + h.depth * 0.5;
+    const offsets = [[0, 5], [5, 0], [0, -5], [-5, 0], [4, 4], [-4, 4], [4, -4], [-4, -4]];
+    let eye = null, eyeClear = false;
+    const eyeYs = [0, 2.5, 4.5].map((rise) => min(-1.5, h.floor + max(2.2, h.depth * 0.72) + rise));
+    for (const eyeY of eyeYs) {
+      for (const [dx, dz] of offsets) {
+        const candidate = [h.x + dx, eyeY, h.z + dz];
+        if (Dw(...candidate) >= -0.5) continue;
+        let clear = true;
+        for (let t = 0.15; t < 0.9; t += 0.15) if (Dw(mix(candidate[0], h.x, t), mix(candidate[1], targetY, t), mix(candidate[2], h.z, t)) > 0.2) { clear = false; break; }
+        if (clear) { eye = candidate; eyeClear = true; break; }
+      }
+      if (eye) break;
+    }
+    if (!eye) eye = [h.x, eyeYs[0], h.z];
+    return { id: ['carpas', 'charales', 'juveniles', 'acociles', 'ajolotes', 'vibora'][i], label: ['CARPAS', 'CHARALES', 'JUVENILES', 'ACOCILES', 'AJOLOTES', 'VÍBORA DE AGUA'][i], active: i < 3, x: h.x, y: targetY, z: h.z, floor: h.floor, depth: h.depth, shore: h.shore, eye, cameraAccessible: eyeClear, target: [h.x, targetY, h.z] };
+  }) : [];
+  const addSchool = (name, kind, count, pool, fallback, r0, r1, size0, size1, speed0, speed1, pad, fixedSite = null) => {
     const stats = fishStats[name];
     stats.attempted++;
-    let site = fishSite(pool, kind, r0, r1, pad);
+    let site = fixedSite || fishSite(pool, kind, r0, r1, pad);
     if (!site && fallback !== pool) site = fishSite(fallback, kind, r0, r1, pad);
     if (!site) {
       stats.rejected++;
@@ -455,44 +508,110 @@ function makeWorld(D, T, flyPts, POSES) {
       return false;
     }
     const speed = rr(speed0, speed1);
-    for (let i = 0; i < count; i++) fish.push(site.h.x, site.y, site.h.z, site.r * rr(0.96, 1.04), rnd(), speed * rr(0.96, 1.04), rr(size0, size1), kind);
+    const targetFish = kind === FISH_SPEC.juvenile.kind ? juvenileFish : fish;
+    for (let i = 0; i < count; i++) targetFish.push(site.h.x, site.y, site.h.z, site.r * rr(0.96, 1.04), rnd(), speed * rr(0.96, 1.04), rr(size0, size1), kind);
     stats.accepted++; stats.individuals += count;
-    const group = { x: +site.h.x.toFixed(2), y: +site.y.toFixed(2), z: +site.h.z.toFixed(2), orbit: +site.r.toFixed(2), depth: +site.h.depth.toFixed(2), shore: +site.h.shore.toFixed(2), count, size: [size0, size1], speed: +speed.toFixed(3) };
+    const group = { x: +site.h.x.toFixed(2), y: +site.y.toFixed(2), z: +site.h.z.toFixed(2), floorY: +site.h.floor.toFixed(2), aboveFloor: +(site.y - site.h.floor).toFixed(2), orbit: +site.r.toFixed(2), depth: +site.h.depth.toFixed(2), shore: +site.h.shore.toFixed(2), count, size: [size0, size1], speed: +speed.toFixed(3) };
     stats.groups.push(group);
     if (stats.samples.length < 3) stats.samples.push(group);
     return true;
   };
-  // 70 carps: 50 in nearshore schools, plus solitary and paired fish drifting in deeper quiet areas.
-  for (let g = 0; g < 10; g++) addSchool('carp', 0, 5, shoreCarpPool, carpFallback, 1.5, 2.8, 0.98, 1.30, 0.025, 0.050, 1.2);
-  for (let g = 0; g < 8; g++) addSchool('carp', 0, 1, driftCarpPool, carpFallback, 0.55, 1.25, 0.98, 1.30, 0.016, 0.032, 1.2);
-  for (let g = 0; g < 6; g++) addSchool('carp', 0, 2, driftCarpPool, carpFallback, 0.7, 1.5, 0.98, 1.30, 0.018, 0.036, 1.2);
-  // 480 charales in 12 coordinated schools of 40 at mid-water depth.
-  for (let g = 0; g < 12; g++) addSchool('charal', 1, 40, charalPool, habitats, 5.0, 9.0, 0.36, 0.50, 0.13, 0.21, 2.8);
-  // 360 juveniles in compact schools at shallow shore sites, preferring existing vegetation patches.
-  for (let g = 0; g < 24; g++) addSchool('juvenile', 2, 15, juvenilePool, shallowFallback, 0.55, 1.15, 0.10, 0.15, 0.24, 0.36, 0.9);
+  if (faunaLab) {
+    const carpSite = labSites[0], charalSite = labSites[1], juvenileSite = labSites[2];
+    if (carpSite) addSchool('carp', FISH_SPEC.carp.kind, 8, [], [], 0.5, 1.2, ...FISH_SPEC.carp.size, ...FISH_SPEC.carp.schoolSpeed, 0.9, carpSite);
+    if (charalSite) addSchool('charal', FISH_SPEC.charal.kind, 48, [], [], 4.5, 6.5, ...FISH_SPEC.charal.size, ...FISH_SPEC.charal.speed, 2.8, charalSite);
+    if (juvenileSite) {
+      addSchool('juvenile', FISH_SPEC.juvenile.kind, 18, [], [], 0.6, 1.0, ...FISH_SPEC.juvenile.size, ...FISH_SPEC.juvenile.speed, 0.9, juvenileSite);
+      addSchool('juvenile', FISH_SPEC.juvenile.kind, 18, [], [], 0.6, 1.0, ...FISH_SPEC.juvenile.size, ...FISH_SPEC.juvenile.speed, 0.9, { ...juvenileSite, r: juvenileSite.r * 0.72 });
+    }
+  } else {
+    // Main-world targets: 70 carps, including school, solitary, and paired fish.
+    for (let g = 0; g < 10; g++) addSchool('carp', FISH_SPEC.carp.kind, 5, shoreCarpPool, carpFallback, 1.5, 2.8, ...FISH_SPEC.carp.size, ...FISH_SPEC.carp.schoolSpeed, 1.2);
+    for (let g = 0; g < 8; g++) addSchool('carp', FISH_SPEC.carp.kind, 1, driftCarpPool, carpFallback, 0.55, 1.25, ...FISH_SPEC.carp.size, ...FISH_SPEC.carp.soloSpeed, 1.2);
+    for (let g = 0; g < 6; g++) addSchool('carp', FISH_SPEC.carp.kind, 2, driftCarpPool, carpFallback, 0.7, 1.5, ...FISH_SPEC.carp.size, ...FISH_SPEC.carp.pairSpeed, 1.2);
+    // 480 charales in 12 coordinated schools of 40 at mid-water depth.
+    for (let g = 0; g < 12; g++) addSchool('charal', FISH_SPEC.charal.kind, 40, charalPool, habitats, 5.0, 9.0, ...FISH_SPEC.charal.size, ...FISH_SPEC.charal.speed, 2.8);
+    // 360 juveniles in compact schools at shallow shore sites, preferring existing vegetation patches.
+    for (let g = 0; g < 24; g++) addSchool('juvenile', FISH_SPEC.juvenile.kind, 15, juvenilePool, shallowFallback, 0.55, 1.15, ...FISH_SPEC.juvenile.size, ...FISH_SPEC.juvenile.speed, 0.9);
+  }
+  if (carpFrontMode && labZones[0] && !labZones[0].cameraAccessible) console.warn('[fauna carp front] laboratory camera failed its water/terrain line-of-sight check');
+  if (carpFrontMode && labZones[0]?.cameraAccessible && fishStats.carp.individuals > 0) {
+    const zone = labZones[0], eye = zone.eye, target = zone.target;
+    const dx = target[0] - eye[0], dy = target[1] - eye[1], dz = target[2] - eye[2], length = hypot(dx, dy, dz) || 1;
+    const distances = [5, 4.5, 5.5, 6, 4];
+    for (const d of distances) {
+      if (d >= length - 0.25) continue;
+      const point = [eye[0] + dx / length * d, eye[1] + dy / length * d, eye[2] + dz / length * d];
+      if (Dw(...point) >= -0.5) continue;
+      let clear = true;
+      for (let t = 0.1; t <= 1; t += 0.1) if (Dw(mix(eye[0], point[0], t), mix(eye[1], point[1], t), mix(eye[2], point[2], t)) > 0.2) { clear = false; break; }
+      if (clear) { zone.carpFrontPoint = point; break; }
+    }
+    if (!zone.carpFrontPoint) console.warn('[fauna carp front] no clear underwater point 4–6 units along the camera ray');
+  }
+  if (faunaLab) {
+    const generatedCarp = fishStats.carp.individuals;
+    console.info('[fauna lab] carp population check', { expected: 8, generated: generatedCarp, acceptedGroups: fishStats.carp.accepted, site: labZones[0], groups: fishStats.carp.groups });
+    if (generatedCarp !== 8) console.warn('[fauna lab] carp site rejected; check the listed site and habitat pools');
+  }
+  const checkFishRecords = (data, category, label) => {
+    const problems = [];
+    if (data.length % 8) problems.push(`buffer length ${data.length} is not divisible by stride 8`);
+    for (let i = 0; i + 7 < data.length; i += 8) {
+      const [x, y, z, orbit, seed, speed, scale, kind] = data.subarray(i, i + 8);
+      if (![x, y, z, orbit, seed, speed, scale, kind].every(Number.isFinite)) problems.push(`instance ${i / 8} contains a non-finite value`);
+      if (kind !== category) problems.push(`instance ${i / 8} has kind ${kind}, expected ${category}`);
+      if (scale <= 0) problems.push(`instance ${i / 8} has invalid scale ${scale}`);
+      if (orbit < 0 || speed < 0) problems.push(`instance ${i / 8} has a negative orbit or speed`);
+      if (problems.length >= 8) break;
+    }
+    if (problems.length) console.warn(`[fish integrity] ${label}`, { count: data.length / 8, problems });
+    else if (fishAudit && label === 'carp') console.info('[fish integrity] carp records valid', { count: data.length / 8, stride: 8, kind: category });
+    return problems.length === 0;
+  };
+  // The shared fish buffer contains carp (kind 0) and charales (kind 1); juveniles use their own buffer.
+  const carpRecordValues = [];
+  for (let i = 0; i + 7 < fish.length; i += 8) if (fish[i + 7] === FISH_SPEC.carp.kind) carpRecordValues.push(...fish.slice(i, i + 8));
+  const carpRecords = new Float32Array(carpRecordValues);
+  checkFishRecords(carpRecords, FISH_SPEC.carp.kind, 'carp');
+  checkFishRecords(new Float32Array(juvenileFish), FISH_SPEC.juvenile.kind, 'juvenile');
+  let carpFrontDiagnostic = null;
+  if (carpFrontMode) {
+    const zone = labZones[0], point = zone?.carpFrontPoint;
+    if (point && carpRecords.length >= 8) {
+      const instance = Array.from(carpRecords.subarray(0, 8));
+      instance[0] = point[0]; instance[1] = point[1]; instance[2] = point[2];
+      instance[3] = 0.001; instance[4] = 9999; instance[5] = max(0.025, abs(instance[5])); instance[6] = 3.5;
+      fish.push(...instance);
+      carpFrontDiagnostic = { position: point, orbit: instance[3], speed: instance[5], scale: instance[6], kind: instance[7], stride: 8 };
+      console.info('[fauna carp front] appended one real-mesh category-0 diagnostic copy', carpFrontDiagnostic);
+    } else console.warn('[fauna carp front] cannot add diagnostic copy: no real carp record or safe front point');
+  }
   if (fishAudit) console.info('[fish audit] generation', {
     habitatSamples: habitats.length,
-    candidatePools: { shallow: shallowPool.length, vegetatedShallow: vegetatedShallowPool.length, shoreCarp: shoreCarpPool.length, driftCarp: driftCarpPool.length, charal: charalPool.length },
+    candidatePools: { shallow: shallowPool.length, vegetatedShallow: vegetatedShallowPool.length, shoreCarp: shoreCarpPool.length, driftCarp: driftCarpPool.length, charal: charalPool.length, openCharal: openCharalPool.length },
     categories: fishStats,
-    realIndividuals: fish.length / 8,
+    realIndividuals: Object.values(fishStats).reduce((n, s) => n + s.individuals, 0),
     diagnosticMode: fishDiag,
   });
-  if (fishDebug) {
-    const eye = [POSES[0][0], POSES[0][1] + gy(POSES[0][0], POSES[0][2]), POSES[0][2]];
+  if (fishAudit && (fishDebug || faunaLab)) {
+    const eye = faunaLab && labZones.length ? labZones[0].eye : [POSES[0][0], POSES[0][1] + gy(POSES[0][0], POSES[0][2]), POSES[0][2]];
     const nearby = Object.entries(fishStats).flatMap(([category, s]) => s.groups.map((g) => ({ category, ...g, distance: +hypot(g.x - eye[0], g.y - eye[1], g.z - eye[2]).toFixed(2) })))
       .sort((a, b) => a.distance - b.distance);
-    console.info('[fish debug] initial camera', eye);
-    console.info('[fish debug] nearest five group centers', nearby.slice(0, 5));
-    console.info('[fish debug] all accepted group centers', nearby);
+    console.info(faunaLab ? '[fauna lab] initial camera' : '[fish debug] initial camera', eye);
+    console.info(faunaLab ? '[fauna lab] zones' : '[fish debug] nearest five group centers', faunaLab ? labZones : nearby.slice(0, 5));
+    if (!faunaLab) console.info('[fish debug] all accepted group centers', nearby);
   }
   // Five fixed, oversized sentinels near the initial view; bypass habitat filters and school motion.
   if (fishDiag) {
-    const eye = [POSES[0][0], POSES[0][1] + gy(POSES[0][0], POSES[0][2]), POSES[0][2]];
-    const dx = POSES[0][3] - eye[0], dy = POSES[0][4] - eye[1], dz = POSES[0][5] - eye[2], dl = hypot(dx, dy, dz) || 1;
+    const eye = faunaLab && labZones.length ? labZones[0].eye : [POSES[0][0], POSES[0][1] + gy(POSES[0][0], POSES[0][2]), POSES[0][2]];
+    const target = faunaLab && labZones.length ? labZones[0].target : [POSES[0][3], POSES[0][4], POSES[0][5]];
+    const dx = target[0] - eye[0], dy = target[1] - eye[1], dz = target[2] - eye[2], dl = hypot(dx, dy, dz) || 1;
     const cx = eye[0] + dx / dl * 5, cy = eye[1] + dy / dl * 5, cz = eye[2] + dz / dl * 5;
     fish.length = 0;
     for (let i = 0; i < 5; i++) fish.push(cx + (i - 2) * 1.1, cy, cz, 0, i * 0.17, 0, 6, 3);
     console.info('[fish audit] diagnostic sentinels', { count: fish.length / 8, center: [cx, cy, cz], instanceStride: 8 });
+    juvenileFish.length = 0;
   }
   // Manta instances are disabled; keep the mesh, buffer, ID and render pipeline alive for now.
   const mantas = [];
@@ -513,7 +632,7 @@ function makeWorld(D, T, flyPts, POSES) {
     for (let c = 0; c < nCells; c++) { const a = L[c]; for (let i = 0; i < a.length; i += 12) { for (let j = 0; j < 12; j++) data[k++] = a[i + j]; lo[c] = min(lo[c], a[i + 1] - 3); hi[c] = max(hi[c], a[i + 1] + 3); } }
     return { data, n, start, lo, hi };
   };
-  return { gy, glints: new Float32Array(glints), chunks: chunks.map(packC), props: props.map(packC), big: pack(big), bigF: pack(big, 2, 1.5), small: pack(small), solids: { data: new Float32Array(sol.data), ranges: sol.ranges }, bubbles: new Float32Array(bubbles), volD, gm, fish: new Float32Array(fish), mantas: new Float32Array(mantas), snow };
+  return { gy, labZones, fishStats, carpFrontDiagnostic, glints: new Float32Array(glints), chunks: chunks.map(packC), props: props.map(packC), big: pack(big), bigF: pack(big, 2, 1.5), small: pack(small), solids: { data: new Float32Array(sol.data), ranges: sol.ranges }, bubbles: new Float32Array(bubbles), volD, gm, fish: new Float32Array(fish), juvenileFish: new Float32Array(juvenileFish), mantas: new Float32Array(mantas), snow };
 }
 const fract = (x) => x - floor(x);
 
@@ -679,5 +798,29 @@ function meshFish() {
   for (let i = 0; i < 4; i++) for (let k = 0; k < 6; k++) { const k2 = (k + 1) % 6; m.quad(rings[i][k], rings[i + 1][k], rings[i + 1][k2], rings[i][k2]); }
   const a = m.v(-0.33, 0, 0), b = m.v(-0.56, 0.2, 0), c = m.v(-0.47, 0, 0), d = m.v(-0.56, -0.2, 0);
   m.tri(a, b, c); m.tri(a, c, d);
+  return m;
+}
+
+// Juvenile samborejo test silhouette: rounded head, short trunk, and a thin flexible tail.
+function meshTadpole() {
+  const m = new Mesh(), seg = 12, profile = [
+    [0.46, 0.014, 0.016], [0.40, 0.10, 0.10], [0.28, 0.20, 0.18], [0.12, 0.19, 0.17],
+    [-0.02, 0.14, 0.12], [-0.14, 0.08, 0.065], [-0.25, 0.047, 0.038], [-0.40, 0.026, 0.021],
+    [-0.64, 0.014, 0.012], [-0.91, 0.004, 0.005],
+  ];
+  const rings = profile.map(([x, ry, rz]) => Array.from({ length: seg }, (_, k) => {
+    const a = k / seg * TAU;
+    return m.v(x, sin(a) * ry, cos(a) * rz);
+  }));
+  for (let i = 0; i < rings.length - 1; i++) for (let k = 0; k < seg; k++) {
+    const k1 = (k + 1) % seg;
+    m.quad(rings[i][k], rings[i][k1], rings[i + 1][k1], rings[i + 1][k]);
+  }
+  const nose = m.v(0.47, 0, 0), tail = m.v(-0.94, 0, 0);
+  for (let k = 0; k < seg; k++) {
+    const k1 = (k + 1) % seg;
+    m.tri(nose, rings[0][k1], rings[0][k]);
+    m.tri(tail, rings[rings.length - 1][k], rings[rings.length - 1][k1]);
+  }
   return m;
 }

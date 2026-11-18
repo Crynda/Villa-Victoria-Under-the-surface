@@ -3,6 +3,12 @@
 // ============================================================================
 const $ = (id) => document.getElementById(id);
 const canvas = $('c'), info = $('i'), body = document.body;
+const DEV_PAGE = location.pathname.endsWith('/dev.html');
+const params = new URLSearchParams(location.search);
+const FAUNA_LAB = DEV_PAGE && params.get('world') === 'fauna-test';
+const FAUNA_CARP_ONLY = FAUNA_LAB && params.get('species') === 'carp';
+const FAUNA_CARP_INSPECT = FAUNA_CARP_ONLY && params.get('inspect') === '1';
+const FAUNA_CARP_FRONT = FAUNA_CARP_ONLY && params.get('carpfront') === '1';
 // a phone held upright gets the page turned on its side (see template.html)
 const rot = matchMedia('(orientation:portrait) and (pointer:coarse)');
 // loading bar: each stage glides it to `to` (the share done) over ~`ms` on the compositor, so it moves while this
@@ -267,13 +273,73 @@ for (let t = 0; t <= FLYT; t += 0.1) { F[FLT] = t; flyAt(); flyPts.push([F[CX], 
 for (const p of POSES) flyPts.push([p[0], -40, p[2]]);
 
 await say('Growing kelp…', 0.73, 2500);
-const Wd = makeWorld(D, T, flyPts, POSES);
+const Wd = makeWorld(D, T, flyPts, POSES, FAUNA_LAB);
 for (const p of POSES) p[1] += Wd.gy(p[0], p[2]);
+const FAUNA_ZONES = Wd.labZones;
+const carpGroupStats = Wd.fishStats.carp.groups;
+const jumpToLabZone = (index) => {
+  const z = FAUNA_ZONES[index]; if (!FAUNA_LAB || !z) return;
+  F[VX] = F[VY] = F[VZ] = 0;
+  lookAt(...z.eye, ...z.target);
+};
+const jumpToCarpInspect = () => {
+  const zone = FAUNA_ZONES[0];
+  if (!FAUNA_CARP_INSPECT || !zone || !carpGroupStats.length) return false;
+  if (!zone.cameraAccessible) { console.warn('[fauna carp inspect] no clear camera ray found for the carp site; using the lab zone view'); return false; }
+  const group = [...carpGroupStats].sort((a, b) => hypot(a.x - zone.eye[0], a.y - zone.eye[1], a.z - zone.eye[2]) - hypot(b.x - zone.eye[0], b.y - zone.eye[1], b.z - zone.eye[2]))[0];
+  F[VX] = F[VY] = F[VZ] = 0;
+  lookAt(...zone.eye, group.x, group.y, group.z);
+  return true;
+};
+const jumpToCarpFront = () => {
+  const zone = FAUNA_ZONES[0], point = Wd.carpFrontDiagnostic?.position;
+  if (!FAUNA_CARP_FRONT || !zone || !point) return false;
+  F[VX] = F[VY] = F[VZ] = 0;
+  lookAt(...zone.eye, ...point);
+  return true;
+};
+const filterFishInstances = (data, kind) => {
+  const records = [];
+  for (let i = 0; i + 7 < data.length; i += 8) if (data[i + 7] === kind) records.push(...data.subarray(i, i + 8));
+  return new Float32Array(records);
+};
+const fishData = FAUNA_CARP_ONLY ? filterFishInstances(Wd.fish, 0) : Wd.fish;
+const juvenileData = FAUNA_CARP_ONLY ? new Float32Array(0) : Wd.juvenileFish;
+if (FAUNA_CARP_ONLY) {
+  const camera = FAUNA_ZONES[0]?.eye || [POSES[0][0], POSES[0][1], POSES[0][2]];
+  const target = FAUNA_ZONES[0]?.target || camera, view = target.map((v, i) => v - camera[i]), viewLength = hypot(...view) || 1;
+  const viewDirection = view.map((v) => +(v / viewLength).toFixed(4));
+  const exactGroupCenter = fishData.length >= 3 ? Array.from(fishData.subarray(0, 3)) : null;
+  const exactCameraGroupDistance = exactGroupCenter ? +hypot(exactGroupCenter[0] - camera[0], exactGroupCenter[1] - camera[1], exactGroupCenter[2] - camera[2]).toFixed(4) : null;
+  const groups = carpGroupStats.map((g) => ({ ...g, distance: +hypot(g.x - camera[0], g.y - camera[1], g.z - camera[2]).toFixed(2), cameraAccessible: !!FAUNA_ZONES[0]?.cameraAccessible }));
+  const hs = (x) => { const v = Math.sin(x * 127.1) * 43758.5453; return v - Math.floor(v); };
+  const approximateCenter = (a) => {
+    const seed = a[4], h0 = hs(seed), h1 = hs(seed + 0.37), h2 = hs(seed + 0.71), radius = a[3], speed = a[5], time = 0;
+    const ta = time * speed + h0 * Math.PI * 2 + (h1 - 0.5) * (26 / Math.max(radius, 1));
+    const ph = h2 * Math.PI * 2, P = [a[0] + radius * Math.cos(ta), a[1] + 0.264 * Math.sin(3 * ta + ph), a[2] + radius * 0.6 * Math.sin(ta)];
+    let T = [-radius * Math.sin(ta), 0.792 * Math.cos(3 * ta + ph), radius * 0.6 * Math.cos(ta)];
+    const tl = hypot(...T) || 1; T = T.map((v) => v / tl * Math.sign(speed));
+    let S = [T[2], 0, -T[0]]; const sl = hypot(...S) || 1; S = S.map((v) => v / sl);
+    const Up = [T[1] * S[2] - T[2] * S[1], T[2] * S[0] - T[0] * S[2], T[0] * S[1] - T[1] * S[0]];
+    const offS = ((h1 - 0.5) * 3 + Math.sin(seed * 40) * 0.3) * 0.55;
+    const offU = ((h2 - 0.5) * 2 + Math.cos(seed * 31) * 0.25) * 0.12;
+    return P.map((v, i) => +(v + S[i] * offS + Up[i] * offU).toFixed(3));
+  };
+  const instances = Array.from({ length: fishData.length / 8 }, (_, n) => {
+    const a = fishData.subarray(n * 8, n * 8 + 8), center = approximateCenter(a), h2 = hs(a[4] + 0.71);
+    const effectiveScale = a[6] * (0.75 + 0.5 * h2) * (FAUNA_CARP_INSPECT ? 1.5 : 1);
+    return { index: n, instance: Array.from(a).map((v) => +v.toFixed(4)), approximateShaderCenterAtT0: center, distanceFromCamera: +hypot(center[0] - camera[0], center[1] - camera[1], center[2] - camera[2]).toFixed(3), effectiveScale: +effectiveScale.toFixed(3), diagnostic: n >= Wd.fishStats.carp.individuals };
+  });
+  console.info('[fauna carp isolation] counts', { generatedReal: Wd.fishStats.carp.individuals, realCarpsInRenderBuffer: fishData.length / 8 - (Wd.carpFrontDiagnostic ? 1 : 0), diagnosticAdded: Wd.carpFrontDiagnostic ? 1 : 0, totalSentToFishDraw: fishData.length / 8, stride: 8, category: 0 });
+  console.info('[fauna carp audit] camera, group and instances', { cameraXYZ: camera, groupCenterXYZ: carpGroupStats.map(({ x, y, z, floorY, aboveFloor, orbit }) => ({ x, y, z, floorY, aboveFloor, orbit })), groupCenterFromInstanceXYZ: exactGroupCenter, cameraToGroupDistance: exactCameraGroupDistance, lookTargetXYZ: target, cameraViewDirection: viewDirection, clearTerrainRay: !!FAUNA_ZONES[0]?.cameraAccessible, siteYMeaning: 'fish orbit center: h.floor + 2..3 world units', groups, instances, carpFrontDiagnostic: Wd.carpFrontDiagnostic });
+  if (FAUNA_CARP_INSPECT) console.info('[fauna carp inspect] meshFish bounds approx. x=-0.56..0.50, y=±0.20×2.5, z=±0.065×2.1; camera aimed at closest accessible group', { camera, groups, freeze: params.get('freezeFish') === '1' });
+  if (Wd.fishStats.carp.individuals + (Wd.carpFrontDiagnostic ? 1 : 0) !== fishData.length / 8) console.warn('[fauna carp isolation] generated/rendered count mismatch');
+}
 D = Wd.gy = T.smp = null; // with gy goes the generator's working memory (about 200 MB)
 
 await say('Building set pieces…', 0.94, 1200);
 // mesh ids: 0-3 boulders, 4-6 sponges, 7-8 coral, 9 tube sponge, 10 whale fluke, 11 ship, 12 manta, 13 fish,
-// 14-20 rock chunks + pebbles, 21-22 coral LOD, 23-25 far LOD of the large rock chunks
+// 14-20 rock chunks + pebbles, 21-22 coral LOD, 23-25 far rock LOD, 26 juvenile fish silhouette
 const meshes = [meshChunk(1, 3), meshChunk(7, 3), meshChunk(13, 3), meshChunk(22, 3),
   meshLathe([[0, 0, 0.5], [0.34, 0, 0.6], [0.5, 0.2, 0.85], [0.6, 0.6, 1], [0.55, 0.95, 1], [0.47, 1.08, 1], [0.38, 1.1, 0.9], [0.3, 1.0, 0.45], [0.26, 0.6, 0.15], [0, 0.35, 0.05]], 18, 0.3, 9),
   meshLathe([[0, 0, 0.5], [0.2, 0, 0.6], [0.26, 0.5, 0.85], [0.4, 1.25, 1], [0.4, 1.42, 1], [0.33, 1.48, 0.9], [0.26, 1.38, 0.4], [0.18, 0.8, 0.12], [0, 0.5, 0.05]], 16, 0.35, 8),
@@ -281,6 +347,8 @@ const meshes = [meshChunk(1, 3), meshChunk(7, 3), meshChunk(13, 3), meshChunk(22
   meshCoral(0), meshCoral(1), meshTubes()].map((m) => m.build());
 meshes.push(meshFluke(), meshShip().build(), meshManta().build(), meshFish().build(),
   meshChunk(3).build(), meshChunk(11).build(), meshChunk(29).build(), meshChunk(5, 3).build(), meshChunk(17, 3).build(), meshChunk(41, 3).build(), meshChunk(9, 1).build(), meshCoral(0, 1).build(), meshCoral(1, 1).build(), meshChunk(5, 2, 1).build(), meshChunk(17, 2, 1).build(), meshChunk(41, 2, 1).build());
+// Append the juvenile variant at ID 26; existing mesh IDs remain unchanged.
+meshes.push(meshTadpole().build());
 let nV = 0, nI = 0;
 for (const m of meshes) { m.v0 = nV; m.i0 = nI; nV += m.nv; nI += m.ib.length; }
 const allV = new Uint8Array(nV * 16), allI = new Uint32Array(nI);
@@ -292,11 +360,22 @@ const solidData = new Float32Array((nSolid + 1) * 12); solidData.set(Wd.solids.d
 const ibSolids = buf(solidData, BU.VERTEX);
 const ibChunk = Wd.chunks.map((c) => buf(c.data, BU.VERTEX)), ibProp = Wd.props.map((c) => buf(c.data, BU.VERTEX));
 const ibBig = buf(new Uint8Array(Wd.big.buf), BU.VERTEX), ibBigF = buf(new Uint8Array(Wd.bigF.buf), BU.VERTEX), ibSmall = buf(new Uint8Array(Wd.small.buf), BU.VERTEX);
-const ibFish = buf(Wd.fish, BU.VERTEX), ibManta = buf(Wd.mantas, BU.VERTEX), ibBubbles = buf(Wd.bubbles, BU.VERTEX), ibSnowB = buf(Wd.snow, BU.VERTEX);
+const ibFish = buf(fishData, BU.VERTEX), ibJuvenile = buf(juvenileData.length ? juvenileData : new Float32Array(8), BU.VERTEX), ibManta = buf(Wd.mantas, BU.VERTEX), ibBubbles = buf(Wd.bubbles, BU.VERTEX), ibSnowB = buf(Wd.snow, BU.VERTEX);
 const ibGl = buf(Wd.glints, BU.VERTEX), nGl = Wd.glints.length / 8;
-const nFish = Wd.fish.length / 8, nManta = Wd.mantas.length / 8, nBub = Wd.bubbles.length / 8, nSnow = Wd.snow.length / 4;
-const MANTA = meshes[12], FISH = meshes[13];
-if (location.pathname.endsWith('/dev.html')) console.info('[fish audit] render upload', { floatValues: Wd.fish.length, stride: 8, instances: nFish, indexedVerticesPerInstance: FISH.ib.length, mantaInstances: nManta });
+const nFish = fishData.length / 8, nJuvenile = juvenileData.length / 8, nManta = Wd.mantas.length / 8, nBub = Wd.bubbles.length / 8, nSnow = Wd.snow.length / 4;
+const MANTA = meshes[12], FISH = meshes[13], FISH_JUVENILE = meshes[26];
+if (DEV_PAGE) {
+  const fishV = new Float32Array(FISH.vb), fishBounds = [[Infinity, -Infinity], [Infinity, -Infinity], [Infinity, -Infinity]];
+  let finiteFishVertices = true, maxFishIndex = -1;
+  for (let v = 0; v < FISH.nv; v++) for (let axis = 0; axis < 3; axis++) {
+    const value = fishV[v * 4 + axis]; finiteFishVertices &&= Number.isFinite(value);
+    fishBounds[axis][0] = Math.min(fishBounds[axis][0], value); fishBounds[axis][1] = Math.max(fishBounds[axis][1], value);
+  }
+  let validFishIndices = FISH.ib.length > 0;
+  for (const index of FISH.ib) { maxFishIndex = Math.max(maxFishIndex, index); if (index >= FISH.nv) validFishIndices = false; }
+  console.info('[fish audit] render upload', { floatValues: fishData.length + juvenileData.length, stride: 8, instances: nFish + nJuvenile, carpDrawInstances: FAUNA_CARP_ONLY ? nFish : undefined, diagnosticCarpAdded: !!Wd.carpFrontDiagnostic, standardInstances: nFish, juvenileInstances: nJuvenile, fishIndices: FISH.ib.length, fishVertices: FISH.nv, maxFishIndex, validFishIndices, finiteFishVertices, fishBounds, depthCompare: 'greater', depthWriteEnabled: true, juvenileIndices: FISH_JUVENILE.ib.length, mantaInstances: nManta });
+  if (!validFishIndices || !finiteFishVertices) console.warn('[fish audit] meshFish geometry integrity failed');
+}
 Q.writeTexture({ texture: tVol }, Wd.volD, { bytesPerRow: NX, rowsPerImage: NY / 2 }, [NX / 2, NY / 2, NZ / 2]);
 Q.writeTexture({ texture: tMap }, Wd.gm, { bytesPerRow: 2048 }, [512, 512]);
 
@@ -472,7 +551,9 @@ function render() {
     if (lod) drawCells(r, Wd.props[i].start, Wd.props[i].lo, Wd.props[i].hi, 3, meshes[18 + i], 0, 6, 110);
   }
   r.setPipeline(pManta); r.setVertexBuffer(1, ibManta); r.drawIndexed(MANTA.ib.length, nManta, MANTA.i0, MANTA.v0, 0);
-  r.setPipeline(pFish); r.setVertexBuffer(1, ibFish); r.drawIndexed(FISH.ib.length, nFish, FISH.i0, FISH.v0, 0);
+  r.setPipeline(pFish);
+  if (nFish) { r.setVertexBuffer(1, ibFish); r.drawIndexed(FISH.ib.length, nFish, FISH.i0, FISH.v0, 0); }
+  if (nJuvenile) { r.setVertexBuffer(1, ibJuvenile); r.drawIndexed(FISH_JUVENILE.ib.length, nJuvenile, FISH_JUVENILE.i0, FISH_JUVENILE.v0, 0); }
   // kelp and plants: 9-row blades up close, 5 rows mid-range, a decimated set far away
   r.setPipeline(pLeaf); r.setVertexBuffer(0, ibBig); drawCells(r, Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, 18, 0, 24);
   r.setPipeline(pLeaf5); drawCells(r, Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, 10, 24, 58);
@@ -589,7 +670,10 @@ const key = (e, v) => {
       if (e.code === 'KeyH') { hud = !hud; hTot = 0; hPer = 1e9; info.textContent = ''; }
       else if (e.code === 'KeyM') mute();
       else if (e.code === 'Escape') ui(true);
-      else if (e.code >= 'Digit1' && e.code <= 'Digit6') lookAt(...POSES[e.code.charCodeAt(5) - 49]);
+      else if (e.code >= 'Digit1' && e.code <= 'Digit6') {
+        const index = e.code.charCodeAt(5) - 49;
+        if (FAUNA_LAB) jumpToLabZone(index); else lookAt(...POSES[index]);
+      }
     }
   }
 };
@@ -636,7 +720,9 @@ $('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.classN
 document.addEventListener('pointerlockchange', () => ui(!document.pointerLockElement));
 
 // draw the first frame and wait for the GPU to finish it (pipelines get compiled on first use) before the reveal
-lookAt(...POSES[0]);
+if (FAUNA_CARP_FRONT && jumpToCarpFront()) { /* diagnostic carp is on the camera's unobstructed underwater ray */ }
+else if (FAUNA_CARP_INSPECT && jumpToCarpInspect()) { /* inspection camera faces the closest accessible real carp group */ }
+else if (FAUNA_LAB && FAUNA_ZONES.length) jumpToLabZone(0); else lookAt(...POSES[0]);
 await say('Letting the light in…', 1, 400);
 render(); await Q.onSubmittedWorkDone();
 setTimeout(keep, 15e3, 'abyssalLoad', ''); // the load counts as survived after 15 s of frames

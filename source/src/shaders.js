@@ -500,9 +500,16 @@ struct GO { @builtin(position) cp: vec4f, @location(0) uv: vec2f, @location(1) @
 // ---------------------------------------------------------------- fish + mantas
 const FISH_DEBUG_MODE = location.pathname.endsWith('/dev.html') && new URLSearchParams(location.search).get('fishdebug') === '1';
 const FISH_FREEZE_MODE = FISH_DEBUG_MODE && new URLSearchParams(location.search).get('freezeFish') === '1';
+const fishParams = new URLSearchParams(location.search);
+const FISH_CARP_INSPECT_MODE = location.pathname.endsWith('/dev.html') && fishParams.get('world') === 'fauna-test' && fishParams.get('species') === 'carp' && fishParams.get('inspect') === '1';
+const FISH_CARP_FREEZE_MODE = FISH_CARP_INSPECT_MODE && fishParams.get('freezeFish') === '1';
+const FISH_CARP_FRONT_MODE = location.pathname.endsWith('/dev.html') && fishParams.get('world') === 'fauna-test' && fishParams.get('species') === 'carp' && fishParams.get('carpfront') === '1';
 const W_ANIM = S_B + /*wgsl*/`
 const FISH_DEBUG_MODE: bool = ${FISH_DEBUG_MODE};
 const FISH_FREEZE_MODE: bool = ${FISH_FREEZE_MODE};
+const FISH_CARP_INSPECT_MODE: bool = ${FISH_CARP_INSPECT_MODE};
+const FISH_CARP_FREEZE_MODE: bool = ${FISH_CARP_FREEZE_MODE};
+const FISH_CARP_FRONT_MODE: bool = ${FISH_CARP_FRONT_MODE};
 struct VI { @location(0) p: vec3f, @location(1) n: vec4f, @location(2) a: vec4f, @location(3) b: vec4f };
 struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) op: vec3f, @location(3) @interpolate(flat) sd: f32, @location(4) lt: f32 };
 struct FVO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) op: vec3f,
@@ -510,10 +517,12 @@ struct FVO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) 
 @vertex fn vsFish(i: VI) -> FVO {
   var o: FVO;
   let s = i.b.x; let h = vec3f(hs(s), hs(s + .37), hs(s + .71));
-  let R = i.a.w; let t = select(g.cam.w, 0., FISH_FREEZE_MODE); let kind = u32(i.b.w);
-  var vertical = 0.68; var lateral = 1.; var tailRate = 4.5;
+  let R = i.a.w; let kind = u32(i.b.w);
+  let freeze = FISH_FREEZE_MODE || (FISH_CARP_FREEZE_MODE && kind == 0u) || (FISH_CARP_FRONT_MODE && kind == 0u && i.b.z > 3.0);
+  let t = select(g.cam.w, 0., freeze);
+  var vertical = 0.68; var lateral = 1.; var tailRate = 4.5; var tailFlex = .22;
   if (kind == 0u) { vertical = 0.12; lateral = 0.55; tailRate = 1.55; }
-  if (kind == 2u) { vertical = 0.24; lateral = 0.27; tailRate = 6.2; }
+  if (kind == 2u) { vertical = 0.20; lateral = 0.22; tailRate = 8.0; tailFlex = .46; }
   let ta = t * i.b.y + h.x * 6.2831853 + (h.y - .5) * (26. / max(R, 1.));
   let ph = h.z * 6.2831853;
   var P = i.a.xyz + vec3f(R * cos(ta), 2.2 * vertical * sin(3. * ta + ph), R * .6 * sin(ta));
@@ -522,11 +531,14 @@ struct FVO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) 
   let S = normalize(cross(vec3f(0., 1., 0.), T)); let Up = cross(T, S);
   var off = S * (((h.y - .5) * 3. + sin(t * .6 + s * 40.) * .3) * lateral) + Up * (((h.z - .5) * 2. + cos(t * .5 + s * 31.) * .25) * vertical);
   if (kind == 3u) { off = vec3f(0.); }
-  // Charales already use the former fishdebug size in normal mode, so don't enlarge them twice.
-  let visualScale = select(1., 2., FISH_DEBUG_MODE && kind != 1u);
+  // Keep diagnostics moderate: charales stay at normal size; tadpole sentinels remain easy to see.
+  var visualScale = 1.;
+  if (FISH_DEBUG_MODE && (kind == 0u || kind == 2u)) { visualScale = 1.5; }
+  if (FISH_CARP_INSPECT_MODE && kind == 0u) { visualScale = 1.5; }
+  if (kind == 3u) { visualScale = 2.; }
   var l = i.p * i.b.z * (.75 + .5 * h.z) * visualScale;
   if (kind == 0u) { l.y *= 2.5; l.z *= 2.1; }
-  if (kind != 3u) { l.z += sin(t * tailRate + s * 50. + l.x * 5.) * .22 * (.25 * i.b.z - l.x); }
+  if (kind != 3u) { l.z += sin(t * tailRate + s * 50. + l.x * 5.) * tailFlex * (.25 * i.b.z - l.x); }
   let w = P + off + T * l.x + Up * l.y + S * l.z;
   o.cp = g.vp * vec4f(w, 1.); o.wp = w; o.n = T * i.n.x + Up * i.n.y + S * i.n.z; o.op = i.p; o.sd = s; o.kind = kind;
   o.lt = shadow1(w);
@@ -555,6 +567,8 @@ struct FVO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) 
   if (FISH_DEBUG_MODE && i.kind == 0u) { alb = vec3f(1.15, .30, .025); shine = 0.; }
   if (FISH_DEBUG_MODE && i.kind == 1u) { alb = vec3f(.08, 1.05, 1.15); shine = 0.; }
   if (FISH_DEBUG_MODE && i.kind == 2u) { alb = vec3f(1.1, .95, .025); shine = 0.; }
+  if (FISH_CARP_INSPECT_MODE && i.kind == 0u) { alb = vec3f(.05, 1.1, 1.35); shine = 0.; }
+  if (FISH_CARP_FRONT_MODE && i.kind == 0u && i.sd > 9998.) { alb = vec3f(.05, 1.1, 1.35); shine = 0.; }
   let E = sunE(i.wp.y, z) * i.lt;
   var c = alb * (E * (.25 + .75 * sat(dot(n, L))) + amb(i.wp, n, vv.g, z) * 1.3);
   c += E * pow(sat(dot(n, normalize(V + L))), 24.) * 1.25 * shine + vec3f(.28, .48, .24) * pow(1. - sat(dot(n, V)), 3.) * .18 * vv.g;
